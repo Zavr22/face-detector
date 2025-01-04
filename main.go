@@ -2,15 +2,13 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
+	_ "encoding/json"
 	"fmt"
 	"image"
 	"image/color"
-	_ "image/draw"
-	_ "image/jpeg"
-	_ "image/png"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 
 	"github.com/chai2010/webp"
 	"github.com/nfnt/resize"
@@ -37,7 +35,7 @@ func saveMatAsWebP(mat gocv.Mat, outputPath string) error {
 	return saveAsWebP(img, outputPath)
 }
 
-func cropAndSaveFace(img gocv.Mat, face image.Rectangle, outputImagePath string, index int) error {
+func cropAndSaveFace(img gocv.Mat, face image.Rectangle, index int, outputDir, baseFilename string) error {
 	extraWidth := face.Dx() / 2
 	extraHeightTop := face.Dy() / 2
 	extraHeightBottom := face.Dy()
@@ -51,10 +49,11 @@ func cropAndSaveFace(img gocv.Mat, face image.Rectangle, outputImagePath string,
 	croppedImg := img.Region(cropRect)
 	defer croppedImg.Close()
 
-	return saveMatAsWebP(croppedImg, fmt.Sprintf("face_%d.webp", index))
+	outputPath := filepath.Join(outputDir, fmt.Sprintf("%s_face_%d.webp", baseFilename, index))
+	return saveMatAsWebP(croppedImg, outputPath)
 }
 
-func detectFace(imagePath string, outputImagePath string, maxWidth, maxHeight uint) (bool, error) {
+func detectFace(imagePath string, outputImagePath string, outputDir string, maxWidth, maxHeight uint) (bool, error) {
 	classifier := gocv.NewCascadeClassifier()
 	if !classifier.Load("haarcascade_frontalface_default.xml") {
 		return false, fmt.Errorf("error loading Haar cascade file")
@@ -83,8 +82,10 @@ func detectFace(imagePath string, outputImagePath string, maxWidth, maxHeight ui
 		return false, nil
 	}
 
-	for i, face := range faces {
+	baseFilename := filepath.Base(imagePath)
+	baseFilename = baseFilename[:len(baseFilename)-len(filepath.Ext(baseFilename))]
 
+	for i, face := range faces {
 		extraWidth := face.Dx() / 2
 		extraHeightTop := face.Dy() / 2
 		extraHeightBottom := face.Dy()
@@ -96,7 +97,7 @@ func detectFace(imagePath string, outputImagePath string, maxWidth, maxHeight ui
 		)
 		gocv.Rectangle(&resizedImg, expandedRect, color.RGBA{255, 0, 0, 0}, 3)
 
-		if err := cropAndSaveFace(resizedImg, face, outputImagePath, i+1); err != nil {
+		if err := cropAndSaveFace(resizedImg, face, i+1, outputDir, baseFilename); err != nil {
 			return false, fmt.Errorf("error saving face image: %v", err)
 		}
 	}
@@ -108,46 +109,42 @@ func detectFace(imagePath string, outputImagePath string, maxWidth, maxHeight ui
 	return true, nil
 }
 
-func processImage(inputPath, outputPath string, maxWidth, maxHeight uint) error {
-	hasFace, err := detectFace(inputPath, outputPath, maxWidth, maxHeight)
+func processImages(inputDir, outputDir string, maxWidth, maxHeight uint) error {
+	files, err := ioutil.ReadDir(inputDir)
 	if err != nil {
-		return fmt.Errorf("failed to detect face: %v", err)
+		return fmt.Errorf("failed to read input directory: %v", err)
 	}
 
-	logData := map[string]interface{}{
-		"input_path":  inputPath,
-		"output_path": outputPath,
-		"has_face":    hasFace,
-	}
-	logJSON, _ := json.MarshalIndent(logData, "", "  ")
-	fmt.Printf("Face detection log:\n%s\n", string(logJSON))
+	for _, file := range files {
+		if file.IsDir() {
+			continue
+		}
 
-	fmt.Printf("Image successfully processed and saved to: %s\n", outputPath)
+		inputPath := filepath.Join(inputDir, file.Name())
+		outputImagePath := filepath.Join(outputDir, fmt.Sprintf("output_%s.webp", file.Name()))
+
+		fmt.Printf("Processing file: %s\n", inputPath)
+		if _, err := detectFace(inputPath, outputImagePath, outputDir, maxWidth, maxHeight); err != nil {
+			fmt.Printf("Error processing file %s: %v\n", inputPath, err)
+		}
+	}
+
 	return nil
 }
 
 func main() {
-	inputPath := "teest.jpg"
-	outputPath := "output.webp"
+	inputDir := "input_images"
+	outputDir := "output_images"
 	maxWidth := uint(1024)
 	maxHeight := uint(1024)
 
-	if err := processImage(inputPath, outputPath, maxWidth, maxHeight); err != nil {
+	if err := os.MkdirAll(outputDir, os.ModePerm); err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating output directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := processImages(inputDir, outputDir, maxWidth, maxHeight); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
